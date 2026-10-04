@@ -1,0 +1,31 @@
+# 機密情報
+.env
+.env.*
+
+# バージョン管理・エディタ
+.git/
+.gitignore
+.vscode/
+.idea/
+
+# Python の生成物
+.venv/
+__pycache__/
+*.pyc
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Docker / 開発ツールの設定（イメージ内では不要）
+# Dockerfile は除外しない（除外すると compose watch が変更を検知せず、rebuild が動かない）
+.dockerignore
+compose.yml
+compose/
+mise.toml
+mise.lock
+Taskfile.yml
+
+# ドキュメント
+*.md
+LICENSE

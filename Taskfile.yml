@@ -1,0 +1,133 @@
+# https://taskfile.dev
+version: '3'
+
+vars:
+  # DB を使う操作は、task up で起動中の app コンテナで実行する（DB のポートを公開しなくて済む）
+  # watch の sync で最新のソースが反映されているのは起動中のコンテナだけなので、run ではなく exec を使う
+  MANAGE: docker compose exec app python manage.py
+
+# app コンテナが起動していることを確認する（exec を使うタスクで共有）
+app_running: &app_running
+  sh: docker compose ps --status running --services | grep -qx app
+  msg: app コンテナが起動していません。別のターミナルで task up を実行してください
+
+tasks:
+  default:
+    silent: true
+    cmds:
+      - task --list
+
+  # ---------------------------------------------------------------------------
+  # 環境
+  # ---------------------------------------------------------------------------
+  up:
+    desc: 開発環境を起動する（watch でソースを同期し、依存関係の変更時は再ビルド）
+    cmds:
+      - docker compose up --build --watch
+
+  down:
+    desc: 開発環境を停止する（DB のデータは残る）
+    cmds:
+      - docker compose down
+
+  build:
+    desc: app イメージを再ビルドする
+    cmds:
+      - docker compose build app
+
+  logs:
+    desc: app のログを表示し続ける
+    cmds:
+      - docker compose logs -f app
+
+  pgadmin:
+    desc: pgAdmin 4 を起動する（http://127.0.0.1:5050）
+    cmds:
+      - docker compose up -d pgadmin
+      - echo 'pgAdmin → http://127.0.0.1:5050 （起動に数十秒かかる。開けない場合は task pgadmin:logs）'
+
+  pgadmin:stop:
+    desc: pgAdmin 4 を停止する
+    cmds:
+      - docker compose stop pgadmin
+
+  pgadmin:logs:
+    desc: pgAdmin 4 のログを表示し続ける
+    cmds:
+      - docker compose logs -f pgadmin
+
+  # ---------------------------------------------------------------------------
+  # マイグレーション
+  # ---------------------------------------------------------------------------
+  makemigrations:
+    desc: マイグレーションファイルをホストに作成する（例 task makemigrations -- accounts）
+    # sync はホスト → コンテナの一方向なので、コンテナ内で作るとホストに残らない。DB 不要なのでホストで実行する
+    # （DB に接続できない旨の警告が出るが、ファイルは作成される）
+    env:
+      DJANGO_SETTINGS_MODULE: config.local_settings
+    cmds:
+      - uv run python manage.py makemigrations {{.CLI_ARGS}}
+
+  showmigrations:
+    desc: マイグレーションの適用状況を表示する
+    preconditions: [*app_running]
+    cmds:
+      - '{{.MANAGE}} showmigrations {{.CLI_ARGS}}'
+
+  migrate:
+    desc: 適用予定を表示し、確認してから migrate する（例 task migrate -- accounts 0002）
+    preconditions: [*app_running]
+    cmds:
+      - '{{.MANAGE}} migrate --plan {{.CLI_ARGS}}'
+      - task: migrate:apply
+
+  migrate:apply:
+    internal: true
+    prompt: 上記の内容で migrate を実行しますか？
+    cmds:
+      - '{{.MANAGE}} migrate {{.CLI_ARGS}}'
+
+  # ---------------------------------------------------------------------------
+  # 管理コマンド
+  # ---------------------------------------------------------------------------
+  test:
+    desc: テストを実行する（例 task test -- search.tests.SomeTestCase）
+    preconditions: [*app_running]
+    cmds:
+      - '{{.MANAGE}} test --settings=config.test_settings {{.CLI_ARGS}}'
+
+  createsuperuser:
+    desc: 管理ユーザーを作成する
+    interactive: true
+    preconditions: [*app_running]
+    cmds:
+      - '{{.MANAGE}} createsuperuser'
+
+  shell:
+    desc: Django shell を起動する
+    interactive: true
+    preconditions: [*app_running]
+    cmds:
+      - '{{.MANAGE}} shell'
+
+  manage:
+    desc: 任意の manage.py コマンドを実行する（例 task manage -- check）
+    interactive: true
+    preconditions: [*app_running]
+    cmds:
+      - '{{.MANAGE}} {{.CLI_ARGS}}'
+
+  # ---------------------------------------------------------------------------
+  # Lint / Format（DB 不要なのでホストで実行）
+  # ---------------------------------------------------------------------------
+  lint:
+    desc: ruff で lint とフォーマットをチェックする
+    cmds:
+      - uv run ruff check .
+      - uv run ruff format --check .
+
+  fix:
+    desc: ruff で自動修正とフォーマットを行う
+    cmds:
+      - uv run ruff check --fix .
+      - uv run ruff format .

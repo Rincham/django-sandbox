@@ -1,0 +1,86 @@
+services:
+  app:
+    build:
+      context: .
+      target: dev
+    ports:
+      - "127.0.0.1:8000:8000"
+    env_file: .env
+    environment:
+      DJANGO_SETTINGS_MODULE: config.local_settings
+      DB_HOST: pg18
+    depends_on:
+      pg18:
+        condition: service_healthy
+    develop:
+      # ソースはバインドマウントせず、watch の sync でコンテナへ一方向に反映する
+      # （.dockerignore で除外したファイルは sync の対象外。runserver の自動リロードで変更が反映される）
+      watch:
+        - action: sync
+          path: .
+          target: /app
+          initial_sync: true
+        - action: rebuild
+          path: ./pyproject.toml
+        - action: rebuild
+          path: ./uv.lock
+        - action: rebuild
+          path: ./.python-version
+        - action: rebuild
+          path: ./Dockerfile
+
+  pg18:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - postgres_data:/var/lib/postgresql
+      - ./compose/postgres/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  pgadmin:
+    image: dpage/pgadmin4:9.18
+    profiles: [pgadmin]         # 必要なときだけ起動する（task pgadmin）
+    ports:
+      - "127.0.0.1:5050:80"
+    environment:
+      # pgAdmin のログイン情報（初回起動時に pgadmin_data へ保存され、以降は変更しても反映されない）
+      # 必須チェック（:?）にすると pgAdmin を使わない操作まで失敗するため、未設定時は pgAdmin 自身の起動エラーに任せる
+      PGADMIN_DEFAULT_EMAIL: ${PGADMIN_DEFAULT_EMAIL:-admin@example.com}
+      PGADMIN_DEFAULT_PASSWORD: ${PGADMIN_DEFAULT_PASSWORD:-}
+    configs:
+      # pg18 を接続先として事前登録する（DB のパスワードは初回接続時に入力する）
+      - source: pgadmin_servers
+        target: /pgadmin4/servers.json
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      pg18:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  pgadmin_data:
+
+configs:
+  pgadmin_servers:
+    content: |
+      {
+        "Servers": {
+          "1": {
+            "Name": "pg18",
+            "Group": "Servers",
+            "Host": "pg18",
+            "Port": 5432,
+            "MaintenanceDB": "${DB_NAME}",
+            "Username": "${DB_USER}",
+            "SSLMode": "prefer"
+          }
+        }
+      }

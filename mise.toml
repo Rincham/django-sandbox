@@ -1,0 +1,7 @@
+[env]
+DJANGO_SETTINGS_MODULE = "config.local_settings"
+PYTHONDONTWRITEBYTECODE = "1"
+PYTHONUNBUFFERED = "1"
+
+[tools]
+task = "3.53.1"

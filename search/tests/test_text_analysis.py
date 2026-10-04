@@ -1,7 +1,10 @@
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from unittest import mock
 
 from django.test import SimpleTestCase
+from sudachipy.errors import SudachiError
 
 from search import text_analysis
 from search.text_analysis import analyze, join_tokens, tokenizer_version
@@ -76,8 +79,76 @@ class LongTextTests(SimpleTestCase):
         self.assertEqual(normalized(analysis.tokens), ['株式会社'] * 16000)
         self.assert_offsets_valid(text, analysis)
 
+    def test_ascii_sentences_are_not_cut_in_the_middle_of_words(self):
+        sentence = 'This is an example sentence about databases. '
+        text = sentence * 400  # 18,000 バイト
+        analysis = analyze(text)
+        self.assertEqual(normalized(analysis.tokens), normalized(analyze(sentence).tokens) * 400)
+        self.assert_offsets_valid(text, analysis)
+
+    def test_decimal_point_is_not_a_sentence_boundary(self):
+        sentences = text_analysis._SENTENCE_BOUNDARY.split('Django 5.2 is out. Next')
+        self.assertEqual(sentences, ['Django 5.2 is out.', ' Next'])
+
+    def test_long_text_without_sentence_boundaries_is_cut_at_commas(self):
+        text = '東京都庁、' * 3300  # 約 5 万バイト
+        analysis = analyze(text)
+        self.assertEqual(normalized(analysis.tokens), ['東京都庁'] * 3300)
+        self.assert_offsets_valid(text, analysis)
+
+    def test_retry_cuts_near_the_middle_at_a_soft_break(self):
+        # 中央で機械的に切ると「東京都庁」の途中で切れる配置にする
+        text = 'あ' * 26 + ('東京都庁' + '㍿' * 10 + '、') * 1000
+        with mock.patch.object(text_analysis, 'MAX_CHUNK_BYTES', 49_000):
+            analysis = analyze(text)
+        self.assertEqual(normalized(analysis.tokens).count('東京都庁'), 1000)
+        self.assert_offsets_valid(text, analysis)
+
+    def test_does_not_retry_other_sudachi_errors(self):
+        tokenizer = mock.Mock()
+        tokenizer.tokenize.side_effect = SudachiError('unexpected')
+        with mock.patch.object(text_analysis, '_tokenizer', return_value=tokenizer):
+            with self.assertRaisesMessage(SudachiError, 'unexpected'):
+                analyze('東京' * 100)
+        self.assertEqual(tokenizer.tokenize.call_count, 1)
+
+
+class CutNearMiddleTests(SimpleTestCase):
+    def test_prefers_the_nearest_soft_break(self):
+        self.assertEqual(text_analysis._cut_near_middle('あいう、えおかきくけこ'), 4)
+        self.assertEqual(text_analysis._cut_near_middle('あいうえおか、きくけこ'), 7)
+
+    def test_falls_back_to_the_middle(self):
+        self.assertEqual(text_analysis._cut_near_middle('あいうえおかきくけこ'), 5)
+
+    def test_ignores_a_soft_break_at_the_end(self):
+        self.assertEqual(text_analysis._cut_near_middle('あいうえ。'), 2)
+
 
 class ConcurrencyTests(SimpleTestCase):
+    def test_dictionary_is_created_once_even_when_threads_race(self):
+        created = []
+
+        def slow_dictionary(**kwargs):
+            time.sleep(0.05)
+            created.append(object())
+            return created[-1]
+
+        barrier = threading.Barrier(8)
+
+        def get_dictionary(_):
+            barrier.wait()
+            return text_analysis._dictionary()
+
+        with (
+            mock.patch.object(text_analysis, '_dictionary_instance', None),
+            mock.patch.object(text_analysis, 'Dictionary', side_effect=slow_dictionary),
+            ThreadPoolExecutor(max_workers=8) as executor,
+        ):
+            results = list(executor.map(get_dictionary, range(8)))
+        self.assertEqual(len(created), 1)
+        self.assertTrue(all(result is created[0] for result in results))
+
     def test_can_be_used_from_multiple_threads(self):
         texts = ['選挙管理委員会が東京都庁で会見を行った。' * 20, 'シュミレーションの附属資料を確認する。' * 20]
         expected = [analyze(text) for text in texts]

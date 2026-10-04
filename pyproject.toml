@@ -8,11 +8,14 @@ dependencies = [
     "django-crispy-forms==2.7",
     "django-environ>=0.14.0",
     "psycopg[binary]>=3.3.6",
+    "sudachidict-core>=20260723.1",
+    "sudachipy==0.7.0",
 ]
 
 [dependency-groups]
 dev = [
     "django-debug-toolbar>=8.0.0",
+    "pyarrow>=25.0.1",
     "pytest-cov>=7.1.0",
     "pytest-django[django]>=4.14.0",
     "pytest-mock>=3.16.0",
@@ -58,3 +61,7 @@ quote-style = "single"
 indent-style = "space"
 docstring-code-format = true
 docstring-code-line-length = "dynamic"
+
+[tool.pytest.ini_options]
+addopts = "--ds=config.test_settings"
+python_files = ["tests.py", "test_*.py"]
